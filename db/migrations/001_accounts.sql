@@ -1,0 +1,7 @@
+CREATE TABLE accounts (
+  id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  account_number_hash VARCHAR(255),
+  owner_name VARCHAR(255),
+  risk_tier VARCHAR(255),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
