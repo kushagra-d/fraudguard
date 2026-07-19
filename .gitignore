@@ -18,3 +18,4 @@ __pycache__/
 .vscode/*
 !.vscode/extensions.json
 graphify-out/
+model-training/data/
