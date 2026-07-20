@@ -1,0 +1,6 @@
+ALTER TABLE transactions
+  ADD COLUMN type ENUM('CASH_IN','CASH_OUT','DEBIT','PAYMENT','TRANSFER') NOT NULL,
+  ADD COLUMN old_balance_orig DECIMAL(18, 2) NOT NULL,
+  ADD COLUMN new_balance_orig DECIMAL(18, 2) NOT NULL,
+  ADD COLUMN old_balance_dest DECIMAL(18, 2) NOT NULL,
+  ADD COLUMN new_balance_dest DECIMAL(18, 2) NOT NULL;
