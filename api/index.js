@@ -15,6 +15,11 @@ const BALANCE_FIELDS = ['old_balance_orig', 'new_balance_orig', 'old_balance_des
 
 app.post('/transactions/ingest', async (req, res) => {
   const transaction = req.body;
+  const idempotencyKey = req.get('Idempotency-Key');
+
+  if (!idempotencyKey) {
+    return res.status(400).json({ error: 'Idempotency-Key header is required' });
+  }
 
   if (!transaction || !transaction.amount) {
     return res.status(400).json({ error: 'Transaction must include at least an amount' });
@@ -30,7 +35,15 @@ app.post('/transactions/ingest', async (req, res) => {
     }
   }
 
-  const job = await transactionQueue.add('score-transaction', transaction);
+  transaction.idempotency_key = idempotencyKey;
+
+  // jobId = idempotencyKey: BullMQ refuses to create a second job under an id that
+  // already exists, so a client retrying the same request can't double-enqueue.
+  const job = await transactionQueue.add('score-transaction', transaction, {
+    jobId: idempotencyKey,
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 2000 },
+  });
 
   res.status(202).json({ message: 'Transaction queued for scoring', jobId: job.id });
 });
@@ -43,5 +56,9 @@ const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`API listening on http://localhost:${PORT}`);
 });
+
+
+
+
 
 

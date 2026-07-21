@@ -2,10 +2,17 @@ import os
 
 import numpy as np
 import xgboost as xgb
-from fastapi import FastAPI
-from pydantic import BaseModel
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
+
+load_dotenv()
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "fraud_model_current.json")
+# Gates the testing-only simulate_failure hook below - only honored when explicitly
+# running in a development environment, so the field can't trigger a real 500 in
+# any other environment even if a caller sends it.
+ENV = os.environ.get("ENV")
 
 # Order the model was trained on - must match model-training/train.py's feature_cols exactly.
 FEATURE_NAMES = [
@@ -42,6 +49,12 @@ class Transaction(BaseModel):
     new_balance_orig: float
     old_balance_dest: float
     new_balance_dest: float
+    # TESTING-ONLY HOOK: lets a caller deliberately trigger a 500 to exercise the
+    # worker's retry/backoff/dead-letter path without waiting for a real failure.
+    # Leading underscore means this needs a pydantic alias - pydantic v2 treats a
+    # literal leading-underscore field name as a private attribute, not a normal
+    # input field, so without the alias this would silently never populate.
+    simulate_failure: bool = Field(default=False, alias="_simulate_failure")
 
 
 def build_features(txn: Transaction) -> dict:
@@ -62,6 +75,12 @@ def build_features(txn: Transaction) -> dict:
 
 @app.post("/score")
 def score(txn: Transaction):
+    # TESTING-ONLY HOOK: see Transaction.simulate_failure above. Gated on ENV so the
+    # field is silently ignored - not just unused, but never even inspected for its
+    # effect - outside local development.
+    if ENV == "development" and txn.simulate_failure:
+        raise HTTPException(status_code=500, detail="Simulated failure (testing hook)")
+
     features = build_features(txn)
     row = np.array([[features[name] for name in FEATURE_NAMES]], dtype=float)
     dmatrix = xgb.DMatrix(row, feature_names=FEATURE_NAMES)

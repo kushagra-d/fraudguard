@@ -65,31 +65,50 @@ const worker = new Worker(
       old_balance_dest: txn.old_balance_dest,
       new_balance_dest: txn.new_balance_dest,
     };
+    // Testing-only: forwarded so the /score simulate-failure hook is reachable
+    // through the real ingest pipeline, not just by curling scoring-service directly.
+    if (txn._simulate_failure) {
+      scoringPayload._simulate_failure = txn._simulate_failure;
+    }
 
     const { data: scoreResult } = await axios.post(SCORING_SERVICE_URL, scoringPayload);
     console.log(`[job ${job.id}] FastAPI scored:`, scoreResult);
 
-    const [txnResult] = await pool.execute(
-      `INSERT INTO transactions
-        (account_id, merchant_id, amount, currency, txn_timestamp, device_fingerprint, geo_country,
-         type, old_balance_orig, new_balance_orig, old_balance_dest, new_balance_dest)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        txn.account_id,
-        txn.merchant_id,
-        txn.amount,
-        txn.currency || null,
-        txn.txn_timestamp ? new Date(txn.txn_timestamp) : new Date(),
-        txn.device_fingerprint || null,
-        txn.geo_country || null,
-        txn.type,
-        txn.old_balance_orig,
-        txn.new_balance_orig,
-        txn.old_balance_dest,
-        txn.new_balance_dest,
-      ]
-    );
-    const transactionId = txnResult.insertId;
+    let transactionId;
+    try {
+      const [txnResult] = await pool.execute(
+        `INSERT INTO transactions
+          (account_id, merchant_id, amount, currency, txn_timestamp, device_fingerprint, geo_country,
+           type, old_balance_orig, new_balance_orig, old_balance_dest, new_balance_dest, idempotency_key)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          txn.account_id,
+          txn.merchant_id,
+          txn.amount,
+          txn.currency || null,
+          txn.txn_timestamp ? new Date(txn.txn_timestamp) : new Date(),
+          txn.device_fingerprint || null,
+          txn.geo_country || null,
+          txn.type,
+          txn.old_balance_orig,
+          txn.new_balance_orig,
+          txn.old_balance_dest,
+          txn.new_balance_dest,
+          txn.idempotency_key,
+        ]
+      );
+      transactionId = txnResult.insertId;
+    } catch (err) {
+      if (err.code === 'ER_DUP_ENTRY') {
+        console.log(
+          `[job ${job.id}] idempotency_key="${txn.idempotency_key}" already exists - ` +
+            `already processed by an earlier attempt, skipping re-insert`
+        );
+        return { duplicate: true, idempotencyKey: txn.idempotency_key };
+      }
+      throw err;
+    }
+
     const modelVersionId = await resolveModelVersionId(scoreResult.model_version);
 
     await pool.execute(
@@ -113,12 +132,35 @@ const worker = new Worker(
 );
 
 worker.on('completed', (job, result) => {
+  if (result && result.duplicate) {
+    console.log(`[job ${job.id}] duplicate - no new-alert emitted`);
+    return;
+  }
   io.emit('new-alert', result);
   console.log(`[job ${job.id}] socket emitted: new-alert`);
 });
 
-worker.on('failed', (job, err) => {
+worker.on('failed', async (job, err) => {
   console.error(`[job ${job?.id}] failed:`, err.message);
+
+  if (!job) return;
+
+  const maxAttempts = job.opts.attempts || 1;
+  if (job.attemptsMade < maxAttempts) {
+    console.log(`[job ${job.id}] attempt ${job.attemptsMade}/${maxAttempts} - will retry`);
+    return;
+  }
+
+  console.log(`[job ${job.id}] exhausted all ${maxAttempts} attempts - writing to failed_transactions`);
+  try {
+    await pool.execute(
+      `INSERT INTO failed_transactions (idempotency_key, payload_json, error_message, attempts_made)
+       VALUES (?, ?, ?, ?)`,
+      [job.data.idempotency_key || null, JSON.stringify(job.data), err.message, job.attemptsMade]
+    );
+  } catch (insertErr) {
+    console.error(`[job ${job.id}] failed to write failed_transactions row:`, insertErr.message);
+  }
 });
 
 console.log('Worker listening on queue "transaction-scoring"');
