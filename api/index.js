@@ -35,6 +35,10 @@ app.post('/transactions/ingest', requireApiKey, async (req, res) => {
     return res.status(400).json({ error: 'Transaction must include at least an amount' });
   }
 
+  if (typeof transaction.currency !== 'string' || transaction.currency.trim() === '') {
+    return res.status(400).json({ error: 'currency is required' });
+  }
+
   if (!VALID_TYPES.includes(transaction.type)) {
     return res.status(400).json({ error: `type must be one of: ${VALID_TYPES.join(', ')}` });
   }
