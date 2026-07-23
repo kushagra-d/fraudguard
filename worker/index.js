@@ -1,6 +1,8 @@
+require('dotenv').config();
 const { Worker } = require('bullmq');
 const mysql = require('mysql2/promise');
 const axios = require('axios');
+const jwt = require('jsonwebtoken');
 const { Server } = require('socket.io');
 
 const REDIS_CONNECTION = { host: '127.0.0.1', port: 6379 };
@@ -10,6 +12,25 @@ const SOCKET_PORT = 4001;
 const io = new Server(SOCKET_PORT, {
   cors: { origin: '*' },
 });
+
+io.use((socket, next) => {
+  const token = socket.handshake.auth && socket.handshake.auth.token;
+  if (!token) {
+    return next(new Error('Missing auth token'));
+  }
+  try {
+    socket.user = jwt.verify(token, process.env.JWT_SECRET);
+    next();
+  } catch (err) {
+    next(new Error('Invalid or expired token'));
+  }
+});
+
+io.on('connection', (socket) => {
+  socket.join('analysts');
+  console.log(`Socket ${socket.id} authenticated as ${socket.user.email}, joined "analysts" room`);
+});
+
 console.log(`Socket.io server listening on port ${SOCKET_PORT}`);
 
 const pool = mysql.createPool({
@@ -136,7 +157,7 @@ worker.on('completed', (job, result) => {
     console.log(`[job ${job.id}] duplicate - no new-alert emitted`);
     return;
   }
-  io.emit('new-alert', result);
+  io.to('analysts').emit('new-alert', result);
   console.log(`[job ${job.id}] socket emitted: new-alert`);
 });
 
