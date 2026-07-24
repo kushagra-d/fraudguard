@@ -28,8 +28,14 @@ function getNextScoringServiceUrl() {
 
 const SOCKET_PORT = Number(process.env.SOCKET_PORT) || 4001;
 
+// Comma-separated so the Dockerized web build and a local Vite dev server can
+// both reach this worker's socket at once, same pattern as SCORING_SERVICE_URLS.
+const DASHBOARD_ORIGINS = (process.env.DASHBOARD_ORIGIN || 'http://localhost:8080')
+  .split(',')
+  .map((origin) => origin.trim());
+
 const io = new Server(SOCKET_PORT, {
-  cors: { origin: process.env.DASHBOARD_ORIGIN },
+  cors: { origin: DASHBOARD_ORIGINS },
 });
 
 // The Redis adapter is what makes io.to('analysts').emit(...) reach clients
