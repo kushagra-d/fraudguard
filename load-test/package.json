@@ -1,0 +1,9 @@
+{
+  "name": "fraudguard-load-test",
+  "version": "1.0.0",
+  "private": true,
+  "main": "measure-scoring-latency.js",
+  "dependencies": {
+    "mysql2": "^3.10.0"
+  }
+}

@@ -4,14 +4,44 @@ const mysql = require('mysql2/promise');
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
 const { Server } = require('socket.io');
+const Redis = require('ioredis');
+const { createAdapter } = require('@socket.io/redis-adapter');
 
-const REDIS_CONNECTION = { host: '127.0.0.1', port: 6379 };
-const SCORING_SERVICE_URL = 'http://localhost:8000/score';
-const SOCKET_PORT = 4001;
+const REDIS_CONNECTION = {
+  host: process.env.REDIS_HOST || '127.0.0.1',
+  port: Number(process.env.REDIS_PORT) || 6379,
+};
+const WORKER_ID = process.env.WORKER_ID || 'worker';
+const WORKER_CONCURRENCY = 5;
+
+// Round-robin across scoring-service instances so a single instance can't
+// bottleneck job throughput once multiple workers are running concurrently.
+const SCORING_SERVICE_URLS = (process.env.SCORING_SERVICE_URLS || 'http://localhost:8000')
+  .split(',')
+  .map((url) => url.trim());
+let nextScoringServiceIndex = 0;
+function getNextScoringServiceUrl() {
+  const url = SCORING_SERVICE_URLS[nextScoringServiceIndex];
+  nextScoringServiceIndex = (nextScoringServiceIndex + 1) % SCORING_SERVICE_URLS.length;
+  return url;
+}
+
+const SOCKET_PORT = Number(process.env.SOCKET_PORT) || 4001;
 
 const io = new Server(SOCKET_PORT, {
   cors: { origin: process.env.DASHBOARD_ORIGIN },
 });
+
+// The Redis adapter is what makes io.to('analysts').emit(...) reach clients
+// connected to ANY worker process's Socket.io server, not just the process that
+// happened to process this particular job - without it, a dashboard connected
+// only to worker-1 would never see alerts for jobs worker-2/3 processed. The
+// adapter requires two separate connections (pub can't also be sub).
+const pubClient = new Redis(REDIS_CONNECTION);
+const subClient = pubClient.duplicate();
+pubClient.on('error', (err) => console.error(`[${WORKER_ID}] Redis pub client error:`, err.message));
+subClient.on('error', (err) => console.error(`[${WORKER_ID}] Redis sub client error:`, err.message));
+io.adapter(createAdapter(pubClient, subClient));
 
 io.use((socket, next) => {
   const token = socket.handshake.auth && socket.handshake.auth.token;
@@ -28,17 +58,24 @@ io.use((socket, next) => {
 
 io.on('connection', (socket) => {
   socket.join('analysts');
-  console.log(`Socket ${socket.id} authenticated as ${socket.user.email}, joined "analysts" room`);
+  console.log(`[${WORKER_ID}] Socket ${socket.id} authenticated as ${socket.user.email}, joined "analysts" room`);
 });
 
-console.log(`Socket.io server listening on port ${SOCKET_PORT}`);
+console.log(`[${WORKER_ID}] Socket.io server listening on port ${SOCKET_PORT}`);
 
+// A connectionLimit of 1 (or a single createConnection()) would silently
+// serialize concurrent job processing at the DB layer even with BullMQ's
+// concurrency set above 1 - each job's queries would queue on that one
+// connection, so "5 jobs running concurrently" would still mean 5 jobs taking
+// turns on the database. The pool has to actually have room for concurrent
+// connections, not just BullMQ being told to run jobs concurrently.
 const pool = mysql.createPool({
-  host: 'localhost',
-  port: 3306,
-  user: 'root',
-  password: 'devpassword',
-  database: 'fraudguard',
+  host: process.env.MYSQL_HOST || 'localhost',
+  port: Number(process.env.MYSQL_PORT) || 3306,
+  user: process.env.MYSQL_USER || 'root',
+  password: process.env.MYSQL_PASSWORD || 'devpassword',
+  database: process.env.MYSQL_DATABASE || 'fraudguard',
+  connectionLimit: 10,
 });
 
 // version string -> model_versions.id. The active model rarely changes while this
@@ -65,18 +102,18 @@ async function prefetchModelVersions() {
   for (const row of rows) {
     modelVersionCache.set(row.version, row.id);
   }
-  console.log(`Prefetched ${rows.length} model_versions into cache`);
+  console.log(`[${WORKER_ID}] Prefetched ${rows.length} model_versions into cache`);
 }
 
 prefetchModelVersions().catch((err) => {
-  console.error('Failed to prefetch model_versions:', err.message);
+  console.error(`[${WORKER_ID}] Failed to prefetch model_versions:`, err.message);
 });
 
 const worker = new Worker(
   'transaction-scoring',
   async (job) => {
     const txn = job.data;
-    console.log(`[job ${job.id}] received:`, txn);
+    console.log(`[${WORKER_ID}] [job ${job.id}] received:`, txn);
 
     const scoringPayload = {
       type: txn.type,
@@ -92,8 +129,9 @@ const worker = new Worker(
       scoringPayload._simulate_failure = txn._simulate_failure;
     }
 
-    const { data: scoreResult } = await axios.post(SCORING_SERVICE_URL, scoringPayload);
-    console.log(`[job ${job.id}] FastAPI scored:`, scoreResult);
+    const scoringServiceUrl = getNextScoringServiceUrl();
+    const { data: scoreResult } = await axios.post(`${scoringServiceUrl}/score`, scoringPayload);
+    console.log(`[${WORKER_ID}] [job ${job.id}] scored via ${scoringServiceUrl}:`, scoreResult);
 
     let transactionId;
     try {
@@ -122,7 +160,7 @@ const worker = new Worker(
     } catch (err) {
       if (err.code === 'ER_DUP_ENTRY') {
         console.log(
-          `[job ${job.id}] idempotency_key="${txn.idempotency_key}" already exists - ` +
+          `[${WORKER_ID}] [job ${job.id}] idempotency_key="${txn.idempotency_key}" already exists - ` +
             `already processed by an earlier attempt, skipping re-insert`
         );
         return { duplicate: true, idempotencyKey: txn.idempotency_key };
@@ -145,38 +183,38 @@ const worker = new Worker(
         JSON.stringify(scoreResult.shap_values),
       ]
     );
-    console.log(`[job ${job.id}] DB write done: transaction #${transactionId}`);
+    console.log(`[${WORKER_ID}] [job ${job.id}] DB write done: transaction #${transactionId}`);
 
     return { transactionId, transaction: txn, scoreResult };
   },
-  { connection: REDIS_CONNECTION }
+  { connection: REDIS_CONNECTION, concurrency: WORKER_CONCURRENCY }
 );
 
 worker.on('completed', (job, result) => {
   if (result && result.duplicate) {
-    console.log(`[job ${job.id}] duplicate - no new-alert emitted`);
+    console.log(`[${WORKER_ID}] [job ${job.id}] duplicate - no new-alert emitted`);
     return;
   }
   if (result.scoreResult.decision !== 'block') {
-    console.log(`[job ${job.id}] decision=${result.scoreResult.decision} - not broadcast, nothing to review`);
+    console.log(`[${WORKER_ID}] [job ${job.id}] decision=${result.scoreResult.decision} - not broadcast, nothing to review`);
     return;
   }
   io.to('analysts').emit('new-alert', result);
-  console.log(`[job ${job.id}] socket emitted: new-alert`);
+  console.log(`[${WORKER_ID}] [job ${job.id}] socket emitted: new-alert`);
 });
 
 worker.on('failed', async (job, err) => {
-  console.error(`[job ${job?.id}] failed:`, err.message);
+  console.error(`[${WORKER_ID}] [job ${job?.id}] failed:`, err.message);
 
   if (!job) return;
 
   const maxAttempts = job.opts.attempts || 1;
   if (job.attemptsMade < maxAttempts) {
-    console.log(`[job ${job.id}] attempt ${job.attemptsMade}/${maxAttempts} - will retry`);
+    console.log(`[${WORKER_ID}] [job ${job.id}] attempt ${job.attemptsMade}/${maxAttempts} - will retry`);
     return;
   }
 
-  console.log(`[job ${job.id}] exhausted all ${maxAttempts} attempts - writing to failed_transactions`);
+  console.log(`[${WORKER_ID}] [job ${job.id}] exhausted all ${maxAttempts} attempts - writing to failed_transactions`);
   try {
     await pool.execute(
       `INSERT INTO failed_transactions (idempotency_key, payload_json, error_message, attempts_made)
@@ -184,8 +222,11 @@ worker.on('failed', async (job, err) => {
       [job.data.idempotency_key || null, JSON.stringify(job.data), err.message, job.attemptsMade]
     );
   } catch (insertErr) {
-    console.error(`[job ${job.id}] failed to write failed_transactions row:`, insertErr.message);
+    console.error(`[${WORKER_ID}] [job ${job.id}] failed to write failed_transactions row:`, insertErr.message);
   }
 });
 
-console.log('Worker listening on queue "transaction-scoring"');
+console.log(
+  `[${WORKER_ID}] Worker listening on queue "transaction-scoring" ` +
+    `(concurrency=${WORKER_CONCURRENCY}, scoring targets: ${SCORING_SERVICE_URLS.join(', ')})`
+);

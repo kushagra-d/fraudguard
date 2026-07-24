@@ -1,11 +1,62 @@
 @import "tailwindcss";
 
+/* Dark is the brand default (the Week 5 "security tool" identity) - light is an
+   explicit alternative, not a naive invert. Both validated with the dataviz
+   skill's contrast/CVD checks against their own real surface, independently. */
+@theme {
+  --color-abyss: #0e1116;
+  --color-surface: #171d26;
+  --color-surface-hover: #1c2330;
+  --color-border: #232b38;
+  --color-brass: #b08a3e;
+  --color-alarm: #c4453a;
+  --color-alarm-bg: #2a1512;
+  --color-verified: #189d7e;
+  --color-verified-bg: #0f2a24;
+  --color-ink: #e7e3da;
+  --color-ink-muted: #8b93a1;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -8px rgba(0, 0, 0, 0.5);
+  --shadow-raised: 0 2px 4px rgba(0, 0, 0, 0.5), 0 16px 40px -12px rgba(0, 0, 0, 0.6);
+
+  --font-display: "IBM Plex Sans Condensed", "IBM Plex Sans", sans-serif;
+  --font-sans: "IBM Plex Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
+}
+
+/* Light theme - warm paper ground with white cards (not stark #fff-on-#fff),
+   and a fully independent Brass/Alarm/Verified trio re-validated against a
+   white surface, not assumed from the dark-mode hexes. */
+:root[data-theme="light"] {
+  --color-abyss: #f2eee4;
+  --color-surface: #ffffff;
+  --color-surface-hover: #f7f4ec;
+  --color-border: #e3ddce;
+  --color-brass: #a17a0f;
+  --color-alarm: #a3392f;
+  --color-alarm-bg: #f7e6e3;
+  --color-verified: #0c9678;
+  --color-verified-bg: #def2ea;
+  --color-ink: #241f17;
+  --color-ink-muted: #6e6759;
+
+  --shadow-card: 0 1px 2px rgba(36, 31, 23, 0.06), 0 8px 24px -8px rgba(36, 31, 23, 0.12);
+  --shadow-raised: 0 2px 4px rgba(36, 31, 23, 0.08), 0 16px 40px -12px rgba(36, 31, 23, 0.16);
+}
+
 html, body, #root {
   height: 100%;
 }
 
 body {
   margin: 0;
-  background-color: #0a0a0c;
-  color: #e4e4e7;
+  background-color: var(--color-abyss);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+::selection {
+  background-color: var(--color-brass);
+  color: var(--color-abyss);
 }

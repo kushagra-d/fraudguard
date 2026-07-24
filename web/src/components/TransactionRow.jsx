@@ -5,6 +5,10 @@ import { formatRelativeTime } from '../lib/time';
 import { FEATURE_LABELS } from '../lib/featureLabels';
 import { ShapBarChart } from './ShapBarChart';
 
+// Scores at or above this read as the highest-priority triage signal, distinct
+// from the decision badge (which only tells you the automated block/allow call).
+const CRITICAL_SCORE = 0.9;
+
 const RAW_GRID_KEYS = [
   'amount',
   'oldbalanceOrg',
@@ -26,7 +30,7 @@ function DecisionBadge({ decision }) {
   return (
     <span
       className={`rounded px-2 py-0.5 font-mono text-xs font-medium ${
-        isBlock ? 'bg-red-950 text-red-400' : 'bg-emerald-950 text-emerald-400'
+        isBlock ? 'bg-alarm-bg text-alarm' : 'bg-verified-bg text-verified'
       }`}
     >
       {decision}
@@ -76,48 +80,61 @@ export function TransactionRow({ transaction, onResolved, isNew }) {
 
   if (resolutionMessage) {
     return (
-      <div className="rounded border border-amber-900 bg-amber-950/50 px-4 py-3 text-xs text-amber-400">
+      <div className="rounded-md border border-brass/40 bg-brass/10 px-4 py-3 text-xs text-brass shadow-card">
         {resolutionMessage}
       </div>
     );
   }
 
+  const isBlock = transaction.decision === 'block';
+
   return (
     <div
-      className={`rounded border transition-colors duration-[2000ms] ${
-        isNew ? 'border-sky-700 bg-sky-950/40' : 'border-zinc-800 bg-zinc-900'
+      className={`relative overflow-hidden rounded-md border shadow-card transition-colors duration-[2000ms] ${
+        isNew ? 'border-brass bg-brass/10' : 'border-border bg-surface'
       }`}
     >
+      {/* Severity stripe - decision reads at a glance from the left edge, not
+          just from the badge text further along the row. */}
+      <div
+        className={`absolute inset-y-0 left-0 w-1 ${isBlock ? 'bg-alarm' : 'bg-verified'}`}
+        aria-hidden="true"
+      />
+
       <button
         onClick={() => setExpanded((v) => !v)}
-        className="grid w-full grid-cols-[80px_100px_140px_90px_90px_100px] items-center gap-4 px-4 py-3 text-left hover:bg-zinc-800/50"
+        className="grid w-full grid-cols-[80px_100px_140px_90px_90px_100px] items-center gap-4 py-3 pl-6 pr-4 text-left transition-colors hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brass"
       >
-        <span className="font-mono text-sm text-zinc-300">#{transaction.id}</span>
-        <span className="text-sm text-zinc-400">{transaction.type}</span>
-        <span className="font-mono text-sm text-zinc-200">
+        <span className="font-mono text-sm tabular-nums text-ink">#{transaction.id}</span>
+        <span className="text-sm text-ink-muted">{transaction.type}</span>
+        <span className="font-mono text-sm tabular-nums text-ink">
           {formatMoney(transaction.amount)}
           {transaction.currency ? ` ${transaction.currency}` : ''}
         </span>
-        <span className="font-mono text-sm text-zinc-200">
+        <span
+          className={`font-mono text-sm tabular-nums ${
+            transaction.score >= CRITICAL_SCORE ? 'font-semibold text-alarm' : 'text-ink'
+          }`}
+        >
           {(transaction.score * 100).toFixed(2)}%
         </span>
         <DecisionBadge decision={transaction.decision} />
-        <span className="text-right text-xs text-zinc-500">
+        <span className="text-right text-xs text-ink-muted">
           {formatRelativeTime(transaction.scored_at)}
         </span>
       </button>
 
       {expanded && (
-        <div className="border-t border-zinc-800 px-4 py-4">
+        <div className="border-t border-border py-4 pl-6 pr-4">
           {transaction.shap_values_json ? (
             <ShapBarChart shapValues={transaction.shap_values_json} />
           ) : (
-            <p className="text-xs text-zinc-500">No SHAP values recorded for this transaction.</p>
+            <p className="text-xs text-ink-muted">No SHAP values recorded for this transaction.</p>
           )}
 
           <button
             onClick={() => setShowRawValues((v) => !v)}
-            className="mb-3 mt-4 text-xs text-zinc-500 underline decoration-zinc-700 hover:text-zinc-300"
+            className="mb-3 mt-4 text-xs text-ink-muted underline decoration-border transition-colors hover:text-brass focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brass"
           >
             {showRawValues ? 'Hide' : 'Show'} raw feature values
           </button>
@@ -127,9 +144,9 @@ export function TransactionRow({ transaction, onResolved, isNew }) {
               {Object.entries(transaction.features_json || {})
                 .filter(([key]) => RAW_GRID_KEYS.includes(key))
                 .map(([key, value]) => (
-                  <div key={key} className="flex justify-between border-b border-zinc-800/60 py-1">
-                    <dt className="text-xs text-zinc-500">{FEATURE_LABELS[key]}</dt>
-                    <dd className="font-mono text-xs text-zinc-200">
+                  <div key={key} className="flex justify-between border-b border-border/60 py-1">
+                    <dt className="text-xs text-ink-muted">{FEATURE_LABELS[key]}</dt>
+                    <dd className="font-mono text-xs tabular-nums text-ink">
                       {key === 'destBalanceZeroed' ? (value ? 'Yes' : 'No') : formatMoney(value)}
                     </dd>
                   </div>
@@ -142,11 +159,11 @@ export function TransactionRow({ transaction, onResolved, isNew }) {
             onChange={(e) => setNotes(e.target.value)}
             placeholder="Notes (optional)"
             rows={2}
-            className="mb-3 w-full rounded border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
+            className="mb-3 w-full rounded border border-border bg-abyss px-3 py-2 text-sm text-ink outline-none focus:border-brass"
           />
 
           {error && (
-            <p className="mb-3 rounded border border-red-900 bg-red-950 px-3 py-2 text-xs text-red-400">
+            <p className="mb-3 rounded border border-alarm/40 bg-alarm-bg px-3 py-2 text-xs text-alarm">
               {error}
             </p>
           )}
@@ -155,14 +172,14 @@ export function TransactionRow({ transaction, onResolved, isNew }) {
             <button
               onClick={() => submitReview('false_positive')}
               disabled={submitting}
-              className="rounded border border-emerald-800 bg-emerald-950 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-900 disabled:opacity-50"
+              className="rounded border border-verified/40 bg-verified-bg px-3 py-1.5 text-xs font-medium text-verified transition-colors hover:brightness-125 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-verified"
             >
               Mark False Positive
             </button>
             <button
               onClick={() => submitReview('confirmed_fraud')}
               disabled={submitting}
-              className="rounded border border-red-800 bg-red-950 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-900 disabled:opacity-50"
+              className="rounded border border-alarm/40 bg-alarm-bg px-3 py-1.5 text-xs font-medium text-alarm transition-colors hover:brightness-125 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-alarm"
             >
               Confirm Fraud
             </button>

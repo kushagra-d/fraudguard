@@ -14,7 +14,10 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const connection = { host: '127.0.0.1', port: 6379 };
+const connection = {
+  host: process.env.REDIS_HOST || '127.0.0.1',
+  port: Number(process.env.REDIS_PORT) || 6379,
+};
 const transactionQueue = new Queue('transaction-scoring', { connection });
 
 const VALID_TYPES = ['CASH_IN', 'CASH_OUT', 'DEBIT', 'PAYMENT', 'TRANSFER'];
