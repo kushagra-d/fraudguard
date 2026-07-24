@@ -1,16 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import { formatRelativeTime } from '../lib/time';
+import { FEATURE_LABELS } from '../lib/featureLabels';
+import { ShapBarChart } from './ShapBarChart';
 
-const FEATURE_LABELS = {
-  amount: 'Amount',
-  oldbalanceOrg: 'Old Balance (Origin)',
-  newbalanceOrig: 'New Balance (Origin)',
-  oldbalanceDest: 'Old Balance (Destination)',
-  newbalanceDest: 'New Balance (Destination)',
-  destBalanceZeroed: 'Destination Balance Zeroed',
-};
+const RAW_GRID_KEYS = [
+  'amount',
+  'oldbalanceOrg',
+  'newbalanceOrig',
+  'oldbalanceDest',
+  'newbalanceDest',
+  'destBalanceZeroed',
+];
 
 function formatMoney(value) {
   return Number(value).toLocaleString('en-US', {
@@ -32,13 +34,21 @@ function DecisionBadge({ decision }) {
   );
 }
 
-export function TransactionRow({ transaction, onResolved }) {
+export function TransactionRow({ transaction, onResolved, isNew }) {
   const { token } = useAuth();
   const [expanded, setExpanded] = useState(false);
+  const [showRawValues, setShowRawValues] = useState(false);
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [resolutionMessage, setResolutionMessage] = useState(null);
+  const resolutionTimeout = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (resolutionTimeout.current) clearTimeout(resolutionTimeout.current);
+    };
+  }, []);
 
   async function submitReview(decision) {
     setSubmitting(true);
@@ -55,7 +65,7 @@ export function TransactionRow({ transaction, onResolved }) {
         // Another analyst already reviewed this one - not an error worth blocking
         // on, just make it visible for a moment before it drops out of the queue.
         setResolutionMessage('Already reviewed by another analyst - removing from queue.');
-        setTimeout(() => onResolved(transaction.id), 1800);
+        resolutionTimeout.current = setTimeout(() => onResolved(transaction.id), 1800);
       } else {
         setError(err.message);
       }
@@ -73,7 +83,11 @@ export function TransactionRow({ transaction, onResolved }) {
   }
 
   return (
-    <div className="rounded border border-zinc-800 bg-zinc-900">
+    <div
+      className={`rounded border transition-colors duration-[2000ms] ${
+        isNew ? 'border-sky-700 bg-sky-950/40' : 'border-zinc-800 bg-zinc-900'
+      }`}
+    >
       <button
         onClick={() => setExpanded((v) => !v)}
         className="grid w-full grid-cols-[80px_100px_140px_90px_90px_100px] items-center gap-4 px-4 py-3 text-left hover:bg-zinc-800/50"
@@ -95,21 +109,33 @@ export function TransactionRow({ transaction, onResolved }) {
 
       {expanded && (
         <div className="border-t border-zinc-800 px-4 py-4">
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-            Features used for scoring
-          </h3>
-          <dl className="mb-4 grid grid-cols-2 gap-x-6 gap-y-1">
-            {Object.entries(transaction.features_json || {})
-              .filter(([key]) => key in FEATURE_LABELS)
-              .map(([key, value]) => (
-                <div key={key} className="flex justify-between border-b border-zinc-800/60 py-1">
-                  <dt className="text-xs text-zinc-500">{FEATURE_LABELS[key]}</dt>
-                  <dd className="font-mono text-xs text-zinc-200">
-                    {key === 'destBalanceZeroed' ? (value ? 'Yes' : 'No') : formatMoney(value)}
-                  </dd>
-                </div>
-              ))}
-          </dl>
+          {transaction.shap_values_json ? (
+            <ShapBarChart shapValues={transaction.shap_values_json} />
+          ) : (
+            <p className="text-xs text-zinc-500">No SHAP values recorded for this transaction.</p>
+          )}
+
+          <button
+            onClick={() => setShowRawValues((v) => !v)}
+            className="mb-3 mt-4 text-xs text-zinc-500 underline decoration-zinc-700 hover:text-zinc-300"
+          >
+            {showRawValues ? 'Hide' : 'Show'} raw feature values
+          </button>
+
+          {showRawValues && (
+            <dl className="mb-4 grid grid-cols-2 gap-x-6 gap-y-1">
+              {Object.entries(transaction.features_json || {})
+                .filter(([key]) => RAW_GRID_KEYS.includes(key))
+                .map(([key, value]) => (
+                  <div key={key} className="flex justify-between border-b border-zinc-800/60 py-1">
+                    <dt className="text-xs text-zinc-500">{FEATURE_LABELS[key]}</dt>
+                    <dd className="font-mono text-xs text-zinc-200">
+                      {key === 'destBalanceZeroed' ? (value ? 'Yes' : 'No') : formatMoney(value)}
+                    </dd>
+                  </div>
+                ))}
+            </dl>
+          )}
 
           <textarea
             value={notes}

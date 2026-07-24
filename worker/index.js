@@ -10,7 +10,7 @@ const SCORING_SERVICE_URL = 'http://localhost:8000/score';
 const SOCKET_PORT = 4001;
 
 const io = new Server(SOCKET_PORT, {
-  cors: { origin: '*' },
+  cors: { origin: process.env.DASHBOARD_ORIGIN },
 });
 
 io.use((socket, next) => {
@@ -147,7 +147,7 @@ const worker = new Worker(
     );
     console.log(`[job ${job.id}] DB write done: transaction #${transactionId}`);
 
-    return { transactionId, transaction: txn, score: scoreResult };
+    return { transactionId, transaction: txn, scoreResult };
   },
   { connection: REDIS_CONNECTION }
 );
@@ -155,6 +155,10 @@ const worker = new Worker(
 worker.on('completed', (job, result) => {
   if (result && result.duplicate) {
     console.log(`[job ${job.id}] duplicate - no new-alert emitted`);
+    return;
+  }
+  if (result.scoreResult.decision !== 'block') {
+    console.log(`[job ${job.id}] decision=${result.scoreResult.decision} - not broadcast, nothing to review`);
     return;
   }
   io.to('analysts').emit('new-alert', result);

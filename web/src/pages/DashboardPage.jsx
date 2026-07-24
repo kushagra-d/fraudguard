@@ -1,19 +1,69 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
+import { useReviewSocket } from '../hooks/useReviewSocket';
+import { toQueueRow } from '../lib/socketAlerts';
 import { Header } from '../components/Header';
 import { TransactionRow } from '../components/TransactionRow';
+
+const NEW_ALERT_HIGHLIGHT_MS = 2000;
 
 export function DashboardPage() {
   const { token } = useAuth();
   const [transactions, setTransactions] = useState(null);
   const [error, setError] = useState(null);
+  const [newlyArrivedIds, setNewlyArrivedIds] = useState(() => new Set());
+  const highlightTimeouts = useRef(new Map());
 
-  useEffect(() => {
-    apiFetch('/review-queue', { token })
+  const fetchQueue = useCallback(() => {
+    return apiFetch('/review-queue', { token })
       .then(setTransactions)
       .catch((err) => setError(err.message));
   }, [token]);
+
+  useEffect(() => {
+    fetchQueue();
+  }, [fetchQueue]);
+
+  // Every highlight timeout this component starts gets tracked here so unmount
+  // can clear whichever ones are still pending - without this, a setState from
+  // a timeout firing after unmount logs React's set-state-after-unmount warning.
+  useEffect(() => {
+    return () => {
+      for (const timeoutId of highlightTimeouts.current.values()) {
+        clearTimeout(timeoutId);
+      }
+      highlightTimeouts.current.clear();
+    };
+  }, []);
+
+  const handleNewAlert = useCallback((payload) => {
+    const row = toQueueRow(payload);
+
+    setTransactions((prev) => {
+      if (!prev) return [row];
+      if (prev.some((t) => t.id === row.id)) return prev; // dedupe
+      return [...prev, row];
+    });
+
+    setNewlyArrivedIds((prev) => {
+      const next = new Set(prev);
+      next.add(row.id);
+      return next;
+    });
+
+    const timeoutId = setTimeout(() => {
+      setNewlyArrivedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(row.id);
+        return next;
+      });
+      highlightTimeouts.current.delete(row.id);
+    }, NEW_ALERT_HIGHLIGHT_MS);
+    highlightTimeouts.current.set(row.id, timeoutId);
+  }, []);
+
+  useReviewSocket(token, { onNewAlert: handleNewAlert, onReconnect: fetchQueue });
 
   function handleResolved(id) {
     setTransactions((prev) => prev.filter((t) => t.id !== id));
@@ -66,6 +116,7 @@ export function DashboardPage() {
               key={transaction.id}
               transaction={transaction}
               onResolved={handleResolved}
+              isNew={newlyArrivedIds.has(transaction.id)}
             />
           ))}
         </div>
