@@ -154,8 +154,30 @@ scripts used to produce it.
 
 ## Load testing
 
-`load-test/` has k6 scripts for ingest throughput (`ingest-test.js`) and
-scoring-service latency (`measure-scoring-latency.js`) under load.
+`load-test/` has a k6 script for ingest throughput (`ingest-test.js`) and a
+Node script that queries MySQL for end-to-end scoring latency
+(`measure-scoring-latency.js`).
+
+```bash
+cd load-test
+k6 run -e INGEST_API_KEY=<key> ingest-test.js
+node measure-scoring-latency.js --minutes 5
+```
+
+Results from a run against the full Docker Compose stack on a single machine
+(20 virtual users sustained, 5% fraud-shaped / 95% benign transaction mix,
+2-minute run):
+
+| Metric | Result |
+|---|---|
+| Requests | 1,817 total, 0 failed (`status 202`), 0 dead-lettered |
+| Sustained throughput | ~15 req/s |
+| Ingest response time (`POST /transactions/ingest`) | avg 3.65 ms · p95 6.01 ms · p99 7.21 ms · max 15.84 ms |
+| End-to-end scoring latency (ingest → worker → scoring-service → DB write) | avg 4.2 ms · p95 5.0 ms · max 465 ms |
+
+The ingest endpoint stays fast under load because it only validates and enqueues
+— it never waits on the model. The single high-outlier (465 ms max) on the
+scoring side lines up with the initial ramp-up burst, not a steady-state issue.
 
 ## CI
 
