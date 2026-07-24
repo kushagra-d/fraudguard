@@ -7,9 +7,36 @@ const { Server } = require('socket.io');
 const Redis = require('ioredis');
 const { createAdapter } = require('@socket.io/redis-adapter');
 
+// Railway's Redis plugin exposes one bundled REDIS_URL rather than separate
+// host/port vars. BullMQ's `connection` option only accepts an options object
+// or a real ioredis instance - not a raw URL string, which it would otherwise
+// mangle via Object.assign - so a URL is parsed into the same object shape the
+// host/port fallback already produces, rather than passed through as-is.
+function parseRedisUrl(url) {
+  const parsed = new URL(url);
+  const options = {
+    host: parsed.hostname,
+    port: Number(parsed.port) || 6379,
+  };
+  if (parsed.username) options.username = decodeURIComponent(parsed.username);
+  if (parsed.password) options.password = decodeURIComponent(parsed.password);
+  if (parsed.pathname && parsed.pathname.length > 1) {
+    options.db = Number(parsed.pathname.slice(1));
+  }
+  if (parsed.protocol === 'rediss:') options.tls = {};
+  return options;
+}
+
 const REDIS_CONNECTION = {
-  host: process.env.REDIS_HOST || '127.0.0.1',
-  port: Number(process.env.REDIS_PORT) || 6379,
+  ...(process.env.REDIS_URL
+    ? parseRedisUrl(process.env.REDIS_URL)
+    : {
+        host: process.env.REDIS_HOST || '127.0.0.1',
+        port: Number(process.env.REDIS_PORT) || 6379,
+      }),
+  // Allows both IPv4 and IPv6 resolution - Railway's internal network can
+  // return AAAA records that ioredis's IPv4-only default (family: 4) rejects.
+  family: 0,
 };
 const WORKER_ID = process.env.WORKER_ID || 'worker';
 const WORKER_CONCURRENCY = 5;
@@ -75,12 +102,18 @@ console.log(`[${WORKER_ID}] Socket.io server listening on port ${SOCKET_PORT}`);
 // connection, so "5 jobs running concurrently" would still mean 5 jobs taking
 // turns on the database. The pool has to actually have room for concurrent
 // connections, not just BullMQ being told to run jobs concurrently.
+const MYSQL_URL = process.env.MYSQL_URL || process.env.DATABASE_URL;
+
 const pool = mysql.createPool({
-  host: process.env.MYSQL_HOST || 'localhost',
-  port: Number(process.env.MYSQL_PORT) || 3306,
-  user: process.env.MYSQL_USER || 'root',
-  password: process.env.MYSQL_PASSWORD || 'devpassword',
-  database: process.env.MYSQL_DATABASE || 'fraudguard',
+  ...(MYSQL_URL
+    ? { uri: MYSQL_URL }
+    : {
+        host: process.env.MYSQL_HOST || 'localhost',
+        port: Number(process.env.MYSQL_PORT) || 3306,
+        user: process.env.MYSQL_USER || 'root',
+        password: process.env.MYSQL_PASSWORD || 'devpassword',
+        database: process.env.MYSQL_DATABASE || 'fraudguard',
+      }),
   connectionLimit: 10,
 });
 
