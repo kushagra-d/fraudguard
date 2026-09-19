@@ -1,0 +1,79 @@
+# Render Blueprint: deploys api, worker, and scoring-service as free Docker
+# web services, and web as a free static site. MySQL and Redis are NOT
+# defined here - Render has no free managed MySQL, so this stack points at
+# external free-forever databases instead (e.g. Aiven MySQL, Upstash Redis).
+# Set MYSQL_URL / REDIS_URL / MYSQL_CA_CERT for api and worker in the Render
+# dashboard after deploy (marked sync: false below so it prompts for them).
+#
+# Fixed service names below are relied on to predict each service's public
+# https://<name>.onrender.com URL for wiring the other services' env vars -
+# if Render has to rename one due to a name collision, update the
+# cross-referenced URLs (SCORING_SERVICE_URLS, DASHBOARD_ORIGIN,
+# VITE_API_URL, VITE_SOCKET_URL) to match.
+
+services:
+  - type: web
+    name: fraudguard-api
+    runtime: docker
+    plan: free
+    dockerContext: api
+    dockerfilePath: api/Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: JWT_SECRET
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: INGEST_API_KEY
+        sync: false
+      - key: MYSQL_URL
+        sync: false
+      - key: MYSQL_CA_CERT
+        sync: false
+      - key: REDIS_URL
+        sync: false
+
+  - type: web
+    name: fraudguard-worker
+    runtime: docker
+    plan: free
+    dockerContext: worker
+    dockerfilePath: worker/Dockerfile
+    envVars:
+      - key: JWT_SECRET
+        sync: false
+      - key: MYSQL_URL
+        sync: false
+      - key: MYSQL_CA_CERT
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: SCORING_SERVICE_URLS
+        value: https://fraudguard-scoring.onrender.com
+      - key: DASHBOARD_ORIGIN
+        value: https://fraudguard-web.onrender.com
+
+  - type: web
+    name: fraudguard-scoring
+    runtime: docker
+    plan: free
+    dockerContext: scoring-service
+    dockerfilePath: scoring-service/Dockerfile
+    healthCheckPath: /docs
+    envVars:
+      - key: ENV
+        value: production
+
+  - type: web
+    name: fraudguard-web
+    runtime: static
+    rootDir: web
+    buildCommand: npm ci && npm run build
+    staticPublishPath: web/dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://fraudguard-api.onrender.com
+      - key: VITE_SOCKET_URL
+        value: https://fraudguard-worker.onrender.com

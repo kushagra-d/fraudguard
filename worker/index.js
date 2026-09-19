@@ -53,7 +53,10 @@ function getNextScoringServiceUrl() {
   return url;
 }
 
-const SOCKET_PORT = Number(process.env.SOCKET_PORT) || 4001;
+// Render assigns its own port via PORT and routes public traffic only to that
+// port, so it takes priority over SOCKET_PORT (which still works unchanged for
+// local Docker Compose, where PORT is never set).
+const SOCKET_PORT = Number(process.env.PORT || process.env.SOCKET_PORT) || 4001;
 
 // Comma-separated so the Dockerized web build and a local Vite dev server can
 // both reach this worker's socket at once, same pattern as SCORING_SERVICE_URLS.
@@ -106,7 +109,14 @@ const MYSQL_URL = process.env.MYSQL_URL || process.env.DATABASE_URL;
 
 const pool = mysql.createPool({
   ...(MYSQL_URL
-    ? { uri: MYSQL_URL }
+    ? {
+        uri: MYSQL_URL,
+        // See api/db.js for why this isn't just `true` - managed providers
+        // like Aiven mandate TLS, and MYSQL_CA_CERT is optional pinning on top.
+        ssl: process.env.MYSQL_CA_CERT
+          ? { ca: process.env.MYSQL_CA_CERT }
+          : { rejectUnauthorized: false },
+      }
     : {
         host: process.env.MYSQL_HOST || 'localhost',
         port: Number(process.env.MYSQL_PORT) || 3306,
