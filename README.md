@@ -4,6 +4,24 @@ A real-time fraud detection system: transactions come in over an API, get queued
 scored by an XGBoost model, and — if flagged — pushed live to an analyst dashboard
 for a human decision, with SHAP-based explanations for every score.
 
+## Live demo
+
+**[fraudguard-web.onrender.com](https://fraudguard-web.onrender.com)**
+
+| | |
+|---|---|
+| Email | `demo.analyst@fraudguard.app` |
+| Password | `FraudGuardDemo2026!` |
+
+This account has the `analyst` role (review queue + decisions only, no user
+management), logging into a review queue pre-seeded with real scored
+transactions — some flagged and blocked, some allowed — so there's something
+to look at immediately.
+
+Hosted on Render's free tier, so the backend services spin down after 15
+minutes idle; the first request after a lull takes ~30-60s to wake back up
+before the dashboard loads.
+
 ## Architecture
 
 ```
@@ -131,16 +149,57 @@ same fixed host port.)
 
 Each service reads from its own `.env` for local dev (see `docker-compose.yml`
 for the values used when running the full stack in Docker). In production
-(e.g. Railway), `api` and `worker` will use `REDIS_URL`/`MYSQL_URL` in place of
-the individual host/port/credential variables if those are set — see each
-service's source for the exact fallback behavior.
+(e.g. Render, Railway), `api` and `worker` use `REDIS_URL`/`MYSQL_URL` in place
+of the individual host/port/credential variables when those are set, and
+negotiate TLS automatically for managed providers that require it (see
+`MYSQL_CA_CERT` below) — see each service's source for the exact fallback
+behavior.
 
 | Service | Key variables |
 |---|---|
-| api | `PORT`, `JWT_SECRET`, `MYSQL_HOST`/`MYSQL_URL`, `REDIS_HOST`/`REDIS_URL`, API key(s) for ingest |
-| worker | `WORKER_ID`, `SCORING_SERVICE_URLS`, `DASHBOARD_ORIGIN`, `SOCKET_PORT`, `MYSQL_HOST`/`MYSQL_URL`, `REDIS_HOST`/`REDIS_URL` |
-| scoring-service | model path/version config |
+| api | `PORT`, `JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `INGEST_API_KEY`, `MYSQL_HOST`/`MYSQL_URL`, `MYSQL_CA_CERT` (optional CA pinning), `REDIS_HOST`/`REDIS_URL` |
+| worker | `WORKER_ID`, `SCORING_SERVICE_URLS`, `DASHBOARD_ORIGIN`, `SOCKET_PORT`/`PORT`, `MYSQL_HOST`/`MYSQL_URL`, `MYSQL_CA_CERT`, `REDIS_HOST`/`REDIS_URL` |
+| scoring-service | model path/version config, `PORT` |
 | web (build-time) | `VITE_API_URL`, `VITE_SOCKET_URL` |
+
+## Deployment
+
+The live demo above runs on free-tier infrastructure with no cost and no
+trial expiration:
+
+- **Render** — `render.yaml` blueprints all four services: `api`, `worker`,
+  and `scoring-service` as free Docker web services, `web` as a free static
+  site. Push to `main` and Render redeploys automatically. Note:
+  `staticPublishPath` for a static site is relative to that service's
+  `rootDir`, not the repo root, despite what Render's own schema docs say.
+- **Aiven** — free-forever managed MySQL (1GB). Requires TLS; `api`/`worker`
+  negotiate it automatically off `MYSQL_URL`, with optional CA pinning via
+  `MYSQL_CA_CERT`.
+- **Upstash** — free-forever serverless Redis. Confirmed compatible with
+  BullMQ's blocking commands (worth re-checking if you swap providers — not
+  all serverless Redis offerings support them).
+
+Two setup steps aren't automated by the blueprint and need to be run once
+against a fresh database:
+
+```bash
+# schema
+mysql --ssl-mode=REQUIRED -h <host> -P <port> -u <user> -p <db> < db/migrations/001_accounts.sql
+# ...through db/migrations/013_add_timestamp_precision.sql
+
+# admin user (reads ADMIN_EMAIL/ADMIN_PASSWORD from the environment)
+cd api && node scripts/seed-admin.js
+```
+
+The `model_versions` table also needs at least one row matching the scoring
+service's `MODEL_VERSION` string (see `scoring-service/main.py`) before the
+worker can resolve a scored transaction to a model version — jobs fail into
+`failed_transactions` until this row exists:
+
+```sql
+INSERT INTO model_versions (version, is_active, trained_at)
+VALUES ('v1-scale0.1x-threshold0.35', TRUE, NOW());
+```
 
 ## Model
 
