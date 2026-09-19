@@ -71,7 +71,9 @@ services:
     runtime: static
     rootDir: web
     buildCommand: npm ci && npm run build
-    staticPublishPath: web/dist
+    # Relative to rootDir (web), not the repo root, despite what Render's own
+    # schema docs say - confirmed by a failed deploy looking for web/web/dist.
+    staticPublishPath: dist
     envVars:
       - key: VITE_API_URL
         value: https://fraudguard-api.onrender.com
