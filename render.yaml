@@ -75,7 +75,10 @@ services:
     # schema docs say - confirmed by a failed deploy looking for web/web/dist.
     staticPublishPath: dist
     envVars:
+      # fraudguard-api got an -e7e9 suffix from Render (name collision on
+      # first deploy) - if this ever changes again, check the service's
+      # actual URL in the Render dashboard rather than assuming the bare name.
       - key: VITE_API_URL
-        value: https://fraudguard-api.onrender.com
+        value: https://fraudguard-api-e7e9.onrender.com
       - key: VITE_SOCKET_URL
         value: https://fraudguard-worker.onrender.com
